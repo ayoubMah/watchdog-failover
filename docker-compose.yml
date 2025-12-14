@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # --- VICTIM A (Primary) ---
+  victim-a:
+    build: ./victim-app
+    container_name: victim-a
+    ports:
+      - "18081:9995"  # Host Port 8081 -> Container Port 9995 (Your app port)
+    environment:
+      - INSTANCE_ID=INSTANCE-A
+
+  # --- VICTIM B (Backup) ---
+  victim-b:
+    build: ./victim-app
+    container_name: victim-b
+    ports:
+      - "18082:9995"  # Host Port 8082 -> Container Port 9995
+    environment:
+      - INSTANCE_ID=INSTANCE-B
+
+  # --- WATCHDOG ---
+  watchdog:
+    build: ./watchdog-app
+    container_name: watchdog
+    ports:
+      - "18083:9999"  # Host Port 8083 -> Container Port 9999
+    depends_on:
+      - victim-a
+    # CRITICAL: This gives the Watchdog permission to send commands
+    # to the Docker Daemon on your actual machine.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
