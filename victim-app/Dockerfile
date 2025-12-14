@@ -1,4 +1,3 @@
-FROM ubuntu:latest
-LABEL authors="KpiWeb_STG"
-
-ENTRYPOINT ["top", "-b"]
+FROM eclipse-temurin:21-jre
+COPY target/*.jar app.jar
+ENTRYPOINT ["java", "-jar", "/app.jar"]
