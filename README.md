@@ -5,6 +5,11 @@
 A hands-on demonstration of how Kubernetes-style resilience works under the hood, rebuilt from scratch in Go.
 
 ---
+## demo
+
+https://github.com/user-attachments/assets/65eec45b-8bac-4a9c-a22f-a7b3867b9f01
+
+---
 
 ## What It Does
 
