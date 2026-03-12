@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	primaryURL    = "http://victim-a:9995/status"
+	primaryURL      = "http://victim-a:9995/status"
+	backupURL       = "http://victim-b:9995/status"
 	backupContainer = "victim-b"
-	checkInterval = 5 * time.Second
+	checkInterval   = 5 * time.Second
 )
 
 func main() {
@@ -34,8 +35,15 @@ func main() {
 
 	ticker := time.NewTicker(checkInterval)
 	for range ticker.C {
-		// Once we already started the backup, no point re-checking
+		// after failover: poll victim-b and keep logging its liveness
 		if backupStarted {
+			resp, err := client.Get(backupURL)
+			if err != nil {
+				log.Printf("[DOWN] victim-b is unreachable: %v", err)
+			} else {
+				resp.Body.Close()
+				log.Printf("[ALIVE] victim-b responded: %s", resp.Status)
+			}
 			continue
 		}
 
