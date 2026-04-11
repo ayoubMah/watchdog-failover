@@ -134,7 +134,8 @@ The watchdog reads all tunables from environment variables. Defaults work out of
 |---|---|---|
 | `PRIMARY_URL` | `http://victim-a:9995/status` | Endpoint to poll for liveness |
 | `BACKUP_URL` | `http://victim-b:9995/status` | Endpoint to poll after failover |
-| `BACKUP_CONTAINER` | `victim-b` | Container name passed to `docker start` |
+| `PRIMARY_CONTAINER` | `victim-a` | Container name the watchdog restarts on failover |
+| `BACKUP_CONTAINER` | `victim-b` | Container name passed to `docker start` on failover |
 | `CHECK_INTERVAL` | `5s` | Poll interval (any Go duration: `1s`, `500ms`, `1m`) |
 | `FAILURE_THRESHOLD` | `3` | Consecutive failures before triggering failover |
 
@@ -155,7 +156,7 @@ watchdog:
 |---|---|---|
 | 1 | ~~Configurable via env/flags~~ | ✅ Done |
 | 2 | ~~Graceful shutdown~~ | ✅ Done |
-| 3 | **Restart downed primary** | Closes the reconciliation loop; currently no recovery path |
+| 3 | ~~Restart downed primary~~ | ✅ Done |
 | 4 | **Automatic traffic switch** | Makes the K8s Service analogy real; depends on restart primary |
 | 5 | **Prometheus metrics** | Observability once core logic is solid |
 | 6 | **Webhook / Slack alert** | Easy win after Prometheus |
@@ -165,7 +166,6 @@ watchdog:
 
 ## Future Features
 
-- [ ] **Restart downed primary** — attempt to restart `victim-a` and switch traffic back once healthy (implements full reconciliation loop)
 - [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
 - [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
 - [ ] **Prometheus metrics endpoint** — expose `/metrics` with counters for checks, failures, and failovers

@@ -24,6 +24,7 @@ func envOrDefault(key, def string) string {
 func main() {
 	primaryURL := envOrDefault("PRIMARY_URL", "http://victim-a:9995/status")
 	backupURL := envOrDefault("BACKUP_URL", "http://victim-b:9995/status")
+	primaryContainer := envOrDefault("PRIMARY_CONTAINER", "victim-a")
 	backupContainer := envOrDefault("BACKUP_CONTAINER", "victim-b")
 
 	checkInterval, err := time.ParseDuration(envOrDefault("CHECK_INTERVAL", "5s"))
@@ -73,8 +74,8 @@ loop:
 		case <-ctx.Done():
 			break loop
 		case <-ticker.C:
-			// after failover: poll victim-b and keep logging its liveness
 			if backupStarted.Load() {
+				// poll backup liveness
 				resp, err := client.Get(backupURL)
 				if err != nil {
 					log.Printf("[DOWN] victim-b is unreachable: %v", err)
@@ -82,23 +83,44 @@ loop:
 					resp.Body.Close()
 					log.Printf("[ALIVE] victim-b responded: %s", resp.Status)
 				}
+
+				// check if primary recovered
+				resp, err = client.Get(primaryURL)
+				if err == nil {
+					resp.Body.Close()
+					log.Printf("[RECOVERED] %s is back online — switching back to primary", primaryContainer)
+					backupStarted.Store(false)
+					failureCount = 0
+				}
 				continue
 			}
 
+			// normal primary health check
 			resp, err := client.Get(primaryURL)
 			if err != nil {
 				failureCount++
 				log.Printf("[DOWN] victim-a is unreachable: %v (failure %d/%d)", err, failureCount, failureThreshold)
 
 				if failureCount >= failureThreshold {
+					// start backup
 					log.Printf("[ACTION] Starting backup container: %s", backupContainer)
 					cmd := exec.Command("docker", "start", backupContainer)
 					out, err := cmd.CombinedOutput()
 					if err != nil {
 						log.Printf("[ERROR] Failed to start %s: %v\n%s", backupContainer, err, out)
 					} else {
-						log.Printf("[OK] %s started successfully: %s", backupContainer, out)
+						log.Printf("[OK] %s started: %s", backupContainer, out)
 						backupStarted.Store(true)
+					}
+
+					// attempt to restart primary so it can recover
+					log.Printf("[ACTION] Attempting to restart primary: %s", primaryContainer)
+					cmd = exec.Command("docker", "start", primaryContainer)
+					out, err = cmd.CombinedOutput()
+					if err != nil {
+						log.Printf("[WARN] Could not restart %s: %v\n%s", primaryContainer, err, out)
+					} else {
+						log.Printf("[OK] %s restart initiated: %s", primaryContainer, out)
 					}
 				}
 			} else {
