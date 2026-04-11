@@ -16,9 +16,10 @@ func main() {
 
 	// print a heartbeat every second so we can see it's alive in the logs
 	go func() {
-		for {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
 			log.Printf("[%s] I am alive!", instanceID)
-			time.Sleep(1 * time.Second)
 		}
 	}()
 
