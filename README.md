@@ -15,8 +15,9 @@ https://github.com/user-attachments/assets/65eec45b-8bac-4a9c-a22f-a7b3867b9f01
 
 - Runs `victim-a` on startup; `victim-b` is built but kept stopped (standby)
 - A watchdog polls `victim-a` every 5 seconds via HTTP
-- If `victim-a` goes down, the watchdog starts the stopped `victim-b` via the Docker socket
-- The watchdog exposes its own `/status` endpoint so you can observe state in real time
+- A built-in reverse proxy always serves on `:18080` — traffic switches automatically on failover, no manual port change needed
+- If `victim-a` goes down, the watchdog starts `victim-b` and reroutes the proxy to it
+- Once `victim-a` recovers, the proxy switches back to the primary automatically
 
 ---
 
@@ -34,39 +35,43 @@ https://github.com/user-attachments/assets/65eec45b-8bac-4a9c-a22f-a7b3867b9f01
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Docker Network                 │
-│                                                 │
-│  ┌──────────┐      HTTP poll /status every 5s   │
-│  │ watchdog │ ──────────────────────────────►   │
-│  │  :9999   │                        ┌─────────┐│
-│  │          │ ◄── UP / DOWN ──────── │victim-a ││
-│  │          │                        │  :9995  ││
-│  │          │ ── docker start ──►    └─────────┘│
-│  │          │                        ┌─────────┐│
-│  └──────────┘                        │victim-b ││
-│                                      │  :9995  ││
-│                                      └─────────┘│
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      Docker Network                      │
+│                                                          │
+│           ┌─────────────────────────────────┐           │
+│  client   │           watchdog              │           │
+│ ────────► │  :9998 proxy  │  :9999 status   │           │
+│           └───────┬───────┴─────────────────┘           │
+│                   │  routes to active backend            │
+│          poll /status every 5s                           │
+│                   │                                      │
+│           ┌───────▼─────────┐   ┌─────────────────┐    │
+│           │    victim-a     │   │    victim-b      │    │
+│           │     :9995       │   │     :9995        │    │
+│           │   (primary)     │   │  (standby/backup)│    │
+│           └─────────────────┘   └─────────────────┘    │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **Ports exposed on the host:**
 
-| Service | Host port | Container port |
-|---|---|---|
-| victim-a | 18081 | 9995 |
-| victim-b | 18082 | 9995 |
-| watchdog | 18083 | 9999 |
+| Service | Host port | Container port | Purpose |
+|---|---|---|---|
+| proxy (watchdog) | 18080 | 9998 | Always hit this — routes to active backend |
+| victim-a | 18081 | 9995 | Direct access (debug/demo) |
+| victim-b | 18082 | 9995 | Direct access (debug/demo) |
+| watchdog status | 18083 | 9999 | Watchdog state endpoint |
 
 ---
 
 ## How It Works
 
-1. `victim-a` and the watchdog start; `victim-b` is built but kept **stopped** (uses a Compose profile so it is not auto-started)
-2. The watchdog polls `http://victim-a:9995/status` on a 5-second ticker
-3. On failure (network error or timeout), watchdog runs `docker start victim-b` via the mounted Docker socket — this actually starts a stopped container
-4. The watchdog's own `/status` endpoint reflects current state (`victim-a UP` or `victim-a DOWN, victim-b running`)
-5. Each victim logs a heartbeat every second so you can watch liveness in `docker compose logs`
+1. `victim-a` and the watchdog start; `victim-b` is built but kept **stopped** (standby profile)
+2. The proxy on `:9998` forwards all traffic to `victim-a` by default
+3. The watchdog polls `victim-a` every 5 seconds
+4. After 3 consecutive failures: starts `victim-b`, restarts `victim-a`, flips the proxy to `victim-b`
+5. Once `victim-a` responds again: flips the proxy back to primary automatically
+6. The watchdog `/status` endpoint always reflects current routing state
 
 ---
 
@@ -82,11 +87,14 @@ To simulate a failure, stop `victim-a` from another terminal:
 docker stop victim-a
 ```
 
-Then watch the watchdog logs kick in and verify `victim-b` is running:
+The proxy switches automatically — keep hitting the same port:
 
 ```bash
+# always use the proxy; it routes to whichever backend is active
+curl http://localhost:18080/status
+
+# check watchdog state
 curl http://localhost:18083/status
-curl http://localhost:18082/status
 ```
 
 ---
@@ -114,7 +122,7 @@ watchdog-go/
 |---|---|---|
 | HTTP poll on `/status` | Liveness probe | |
 | Auto-start backup container | ReplicaSet self-healing | |
-| Manual port switch on failure | Service load balancing | No proxy — you hit `:18082` manually after failover |
+| Reverse proxy with auto-switch | Service load balancing | Proxy on `:18080` reroutes automatically on failover |
 | Manual imperative logic | Declarative desired state | |
 
 ---
@@ -134,6 +142,8 @@ The watchdog reads all tunables from environment variables. Defaults work out of
 |---|---|---|
 | `PRIMARY_URL` | `http://victim-a:9995/status` | Endpoint to poll for liveness |
 | `BACKUP_URL` | `http://victim-b:9995/status` | Endpoint to poll after failover |
+| `PRIMARY_BACKEND` | `http://victim-a:9995` | Proxy target while primary is healthy |
+| `BACKUP_BACKEND` | `http://victim-b:9995` | Proxy target after failover |
 | `PRIMARY_CONTAINER` | `victim-a` | Container name the watchdog restarts on failover |
 | `BACKUP_CONTAINER` | `victim-b` | Container name passed to `docker start` on failover |
 | `CHECK_INTERVAL` | `5s` | Poll interval (any Go duration: `1s`, `500ms`, `1m`) |
@@ -157,7 +167,7 @@ watchdog:
 | 1 | ~~Configurable via env/flags~~ | ✅ Done |
 | 2 | ~~Graceful shutdown~~ | ✅ Done |
 | 3 | ~~Restart downed primary~~ | ✅ Done |
-| 4 | **Automatic traffic switch** | Makes the K8s Service analogy real; depends on restart primary |
+| 4 | ~~Automatic traffic switch~~ | ✅ Done |
 | 5 | **Prometheus metrics** | Observability once core logic is solid |
 | 6 | **Webhook / Slack alert** | Easy win after Prometheus |
 | 7 | **Web UI dashboard** | Demo visuals, no functional value — do last |
@@ -166,7 +176,6 @@ watchdog:
 
 ## Future Features
 
-- [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
 - [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
 - [ ] **Prometheus metrics endpoint** — expose `/metrics` with counters for checks, failures, and failovers
 - [ ] **Web UI dashboard** — minimal HTML page served by the watchdog showing live status of all instances

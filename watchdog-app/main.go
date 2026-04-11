@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,9 +23,19 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
+func mustParseURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		log.Fatalf("invalid URL %q: %v", raw, err)
+	}
+	return u
+}
+
 func main() {
 	primaryURL := envOrDefault("PRIMARY_URL", "http://victim-a:9995/status")
 	backupURL := envOrDefault("BACKUP_URL", "http://victim-b:9995/status")
+	primaryBackend := envOrDefault("PRIMARY_BACKEND", "http://victim-a:9995")
+	backupBackend := envOrDefault("BACKUP_BACKEND", "http://victim-b:9995")
 	primaryContainer := envOrDefault("PRIMARY_CONTAINER", "victim-a")
 	backupContainer := envOrDefault("BACKUP_CONTAINER", "victim-b")
 
@@ -48,20 +60,50 @@ func main() {
 	failureCount := 0
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	// HTTP status server
+	// reverse proxy — routes to primary or backup based on current state
+	primaryTarget := mustParseURL(primaryBackend)
+	backupTarget := mustParseURL(backupBackend)
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			var target *url.URL
+			if backupStarted.Load() {
+				target = backupTarget
+			} else {
+				target = primaryTarget
+			}
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+		},
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+
+	// :9999 — watchdog status
+	statusMux := http.NewServeMux()
+	statusMux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		if backupStarted.Load() {
 			fmt.Fprintln(w, "watchdog: victim-a is DOWN, victim-b is running")
 		} else {
 			fmt.Fprintln(w, "watchdog: victim-a is UP")
 		}
 	})
-	server := &http.Server{Addr: ":9999", Handler: mux}
+
+	// :9998 — transparent proxy to active backend
+	mux.Handle("/", proxy)
+
+	statusServer := &http.Server{Addr: ":9999", Handler: statusMux}
+	proxyServer := &http.Server{Addr: ":9998", Handler: mux}
 
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+		if err := statusServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("status server error: %v", err)
+		}
+	}()
+	go func() {
+		log.Printf("Proxy listening on :9998 → routing to active backend")
+		if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("proxy server error: %v", err)
 		}
 	}()
 
@@ -88,7 +130,7 @@ loop:
 				resp, err = client.Get(primaryURL)
 				if err == nil {
 					resp.Body.Close()
-					log.Printf("[RECOVERED] %s is back online — switching back to primary", primaryContainer)
+					log.Printf("[RECOVERED] %s is back online — switching proxy back to primary", primaryContainer)
 					backupStarted.Store(false)
 					failureCount = 0
 				}
@@ -109,7 +151,7 @@ loop:
 					if err != nil {
 						log.Printf("[ERROR] Failed to start %s: %v\n%s", backupContainer, err, out)
 					} else {
-						log.Printf("[OK] %s started: %s", backupContainer, out)
+						log.Printf("[OK] %s started — proxy now routes to backup", backupContainer, out)
 						backupStarted.Store(true)
 					}
 
@@ -137,8 +179,11 @@ loop:
 	log.Println("Shutting down watchdog...")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+	if err := statusServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("status server shutdown error: %v", err)
+	}
+	if err := proxyServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("proxy server shutdown error: %v", err)
 	}
 	log.Println("Watchdog stopped.")
 }

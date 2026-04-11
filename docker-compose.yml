@@ -21,7 +21,8 @@ services:
     build: ./watchdog-app
     container_name: watchdog
     ports:
-      - "18083:9999"
+      - "18080:9998"  # reverse proxy — always hit this; routes to active backend automatically
+      - "18083:9999"  # watchdog status
     volumes:
       # Mount Docker socket so watchdog can control containers on the host
       - /var/run/docker.sock:/var/run/docker.sock
