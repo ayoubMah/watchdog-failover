@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -36,59 +39,84 @@ func main() {
 	log.Printf("Watchdog started. primary=%s backup=%s interval=%s threshold=%d",
 		primaryURL, backupURL, checkInterval, failureThreshold)
 
+	// cancel on SIGTERM or Ctrl-C
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var backupStarted atomic.Bool
 	failureCount := 0
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	// expose a simple status endpoint for the watchdog itself
+	// HTTP status server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		if backupStarted.Load() {
+			fmt.Fprintln(w, "watchdog: victim-a is DOWN, victim-b is running")
+		} else {
+			fmt.Fprintln(w, "watchdog: victim-a is UP")
+		}
+	})
+	server := &http.Server{Addr: ":9999", Handler: mux}
+
 	go func() {
-		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-			if backupStarted.Load() {
-				fmt.Fprintln(w, "watchdog: victim-a is DOWN, victim-b is running")
-			} else {
-				fmt.Fprintln(w, "watchdog: victim-a is UP")
-			}
-		})
-		log.Fatal(http.ListenAndServe(":9999", nil))
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
 	}()
 
 	ticker := time.NewTicker(checkInterval)
-	for range ticker.C {
-		// after failover: poll victim-b and keep logging its liveness
-		if backupStarted.Load() {
-			resp, err := client.Get(backupURL)
-			if err != nil {
-				log.Printf("[DOWN] victim-b is unreachable: %v", err)
-			} else {
-				resp.Body.Close()
-				log.Printf("[ALIVE] victim-b responded: %s", resp.Status)
-			}
-			continue
-		}
+	defer ticker.Stop()
 
-		resp, err := client.Get(primaryURL)
-		if err != nil {
-			failureCount++
-			log.Printf("[DOWN] victim-a is unreachable: %v (failure %d/%d)", err, failureCount, failureThreshold)
-
-			if failureCount >= failureThreshold {
-				log.Printf("[ACTION] Starting backup container: %s", backupContainer)
-				cmd := exec.Command("docker", "start", backupContainer)
-				out, err := cmd.CombinedOutput()
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case <-ticker.C:
+			// after failover: poll victim-b and keep logging its liveness
+			if backupStarted.Load() {
+				resp, err := client.Get(backupURL)
 				if err != nil {
-					log.Printf("[ERROR] Failed to start %s: %v\n%s", backupContainer, err, out)
+					log.Printf("[DOWN] victim-b is unreachable: %v", err)
 				} else {
-					log.Printf("[OK] %s started successfully: %s", backupContainer, out)
-					backupStarted.Store(true)
+					resp.Body.Close()
+					log.Printf("[ALIVE] victim-b responded: %s", resp.Status)
 				}
+				continue
 			}
-		} else {
-			if failureCount > 0 {
-				log.Printf("[RECOVERED] victim-a is back after %d failure(s), resetting counter", failureCount)
-				failureCount = 0
+
+			resp, err := client.Get(primaryURL)
+			if err != nil {
+				failureCount++
+				log.Printf("[DOWN] victim-a is unreachable: %v (failure %d/%d)", err, failureCount, failureThreshold)
+
+				if failureCount >= failureThreshold {
+					log.Printf("[ACTION] Starting backup container: %s", backupContainer)
+					cmd := exec.Command("docker", "start", backupContainer)
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						log.Printf("[ERROR] Failed to start %s: %v\n%s", backupContainer, err, out)
+					} else {
+						log.Printf("[OK] %s started successfully: %s", backupContainer, out)
+						backupStarted.Store(true)
+					}
+				}
+			} else {
+				if failureCount > 0 {
+					log.Printf("[RECOVERED] victim-a is back after %d failure(s), resetting counter", failureCount)
+					failureCount = 0
+				}
+				resp.Body.Close()
+				log.Printf("[ALIVE] victim-a responded: %s", resp.Status)
 			}
-			resp.Body.Close()
-			log.Printf("[ALIVE] victim-a responded: %s", resp.Status)
 		}
 	}
+
+	log.Println("Shutting down watchdog...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
+	log.Println("Watchdog stopped.")
 }

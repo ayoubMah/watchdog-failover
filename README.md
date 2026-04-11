@@ -154,7 +154,7 @@ watchdog:
 | Priority | Feature | Why |
 |---|---|---|
 | 1 | ~~Configurable via env/flags~~ | ✅ Done |
-| 2 | **Graceful shutdown** | Watchdog can be killed mid-failover — handle `SIGTERM` first |
+| 2 | ~~Graceful shutdown~~ | ✅ Done |
 | 3 | **Restart downed primary** | Closes the reconciliation loop; currently no recovery path |
 | 4 | **Automatic traffic switch** | Makes the K8s Service analogy real; depends on restart primary |
 | 5 | **Prometheus metrics** | Observability once core logic is solid |
@@ -165,7 +165,6 @@ watchdog:
 
 ## Future Features
 
-- [ ] **Graceful shutdown** — handle `SIGTERM` to flush state before the watchdog exits
 - [ ] **Restart downed primary** — attempt to restart `victim-a` and switch traffic back once healthy (implements full reconciliation loop)
 - [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
 - [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
