@@ -11,6 +11,7 @@ services:
   victim-b:
     build: ./victim-app
     container_name: victim-b
+    profiles: ["standby"]   # does not auto-start; watchdog triggers it via docker start
     environment:
       - INSTANCE_ID=INSTANCE-B
     ports:

@@ -13,9 +13,9 @@ https://github.com/user-attachments/assets/65eec45b-8bac-4a9c-a22f-a7b3867b9f01
 
 ## What It Does
 
-- Runs two victim instances (`victim-a`, `victim-b`) that expose a `/status` endpoint
+- Runs `victim-a` on startup; `victim-b` is built but kept stopped (standby)
 - A watchdog polls `victim-a` every 5 seconds via HTTP
-- If `victim-a` goes down, the watchdog automatically starts `victim-b` via the Docker socket
+- If `victim-a` goes down, the watchdog starts the stopped `victim-b` via the Docker socket
 - The watchdog exposes its own `/status` endpoint so you can observe state in real time
 
 ---
@@ -62,9 +62,9 @@ https://github.com/user-attachments/assets/65eec45b-8bac-4a9c-a22f-a7b3867b9f01
 
 ## How It Works
 
-1. Both victim instances start; `victim-b` is kept running but idle
+1. `victim-a` and the watchdog start; `victim-b` is built but kept **stopped** (uses a Compose profile so it is not auto-started)
 2. The watchdog polls `http://victim-a:9995/status` on a 5-second ticker
-3. On failure (network error or timeout), watchdog runs `docker start victim-b` via the mounted Docker socket
+3. On failure (network error or timeout), watchdog runs `docker start victim-b` via the mounted Docker socket — this actually starts a stopped container
 4. The watchdog's own `/status` endpoint reflects current state (`victim-a UP` or `victim-a DOWN, victim-b running`)
 5. Each victim logs a heartbeat every second so you can watch liveness in `docker compose logs`
 
