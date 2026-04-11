@@ -4,25 +4,41 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
 
-const (
-	primaryURL       = "http://victim-a:9995/status"
-	backupURL        = "http://victim-b:9995/status"
-	backupContainer  = "victim-b"
-	checkInterval    = 5 * time.Second
-	failureThreshold = 3 // consecutive failures required before triggering failover
-)
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 func main() {
+	primaryURL := envOrDefault("PRIMARY_URL", "http://victim-a:9995/status")
+	backupURL := envOrDefault("BACKUP_URL", "http://victim-b:9995/status")
+	backupContainer := envOrDefault("BACKUP_CONTAINER", "victim-b")
+
+	checkInterval, err := time.ParseDuration(envOrDefault("CHECK_INTERVAL", "5s"))
+	if err != nil {
+		log.Fatalf("invalid CHECK_INTERVAL: %v", err)
+	}
+
+	failureThreshold, err := strconv.Atoi(envOrDefault("FAILURE_THRESHOLD", "3"))
+	if err != nil || failureThreshold < 1 {
+		log.Fatalf("invalid FAILURE_THRESHOLD: must be a positive integer")
+	}
+
+	log.Printf("Watchdog started. primary=%s backup=%s interval=%s threshold=%d",
+		primaryURL, backupURL, checkInterval, failureThreshold)
+
 	var backupStarted atomic.Bool
 	failureCount := 0
 	client := &http.Client{Timeout: 2 * time.Second}
-
-	log.Println("Watchdog started. Monitoring victim-a every 5s...")
 
 	// expose a simple status endpoint for the watchdog itself
 	go func() {

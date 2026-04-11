@@ -126,15 +126,50 @@ watchdog-go/
 
 ---
 
+## Configuration
+
+The watchdog reads all tunables from environment variables. Defaults work out of the box with the provided `docker-compose.yml`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PRIMARY_URL` | `http://victim-a:9995/status` | Endpoint to poll for liveness |
+| `BACKUP_URL` | `http://victim-b:9995/status` | Endpoint to poll after failover |
+| `BACKUP_CONTAINER` | `victim-b` | Container name passed to `docker start` |
+| `CHECK_INTERVAL` | `5s` | Poll interval (any Go duration: `1s`, `500ms`, `1m`) |
+| `FAILURE_THRESHOLD` | `3` | Consecutive failures before triggering failover |
+
+Example override in `docker-compose.yml`:
+
+```yaml
+watchdog:
+  environment:
+    - CHECK_INTERVAL=2s
+    - FAILURE_THRESHOLD=5
+```
+
+---
+
+## Roadmap
+
+| Priority | Feature | Why |
+|---|---|---|
+| 1 | ~~Configurable via env/flags~~ | ✅ Done |
+| 2 | **Graceful shutdown** | Watchdog can be killed mid-failover — handle `SIGTERM` first |
+| 3 | **Restart downed primary** | Closes the reconciliation loop; currently no recovery path |
+| 4 | **Automatic traffic switch** | Makes the K8s Service analogy real; depends on restart primary |
+| 5 | **Prometheus metrics** | Observability once core logic is solid |
+| 6 | **Webhook / Slack alert** | Easy win after Prometheus |
+| 7 | **Web UI dashboard** | Demo visuals, no functional value — do last |
+
+---
+
 ## Future Features
 
-- [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
-- [ ] **Restart downed primary** — instead of only starting a backup, attempt to restart `victim-a` and switch traffic back once healthy (implements full reconciliation loop)
-- [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
-- [ ] **Configurable via env/flags** — make check interval, timeout, target URLs, and container names configurable without recompiling
-- [ ] **Prometheus metrics endpoint** — expose `/metrics` with counters for checks, failures, and failovers
 - [ ] **Graceful shutdown** — handle `SIGTERM` to flush state before the watchdog exits
-- [ ] **Health history / state machine** — track consecutive failures before triggering failover (avoid flapping on transient errors)
+- [ ] **Restart downed primary** — attempt to restart `victim-a` and switch traffic back once healthy (implements full reconciliation loop)
+- [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
+- [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
+- [ ] **Prometheus metrics endpoint** — expose `/metrics` with counters for checks, failures, and failovers
 - [ ] **Web UI dashboard** — minimal HTML page served by the watchdog showing live status of all instances
 - [ ] **Webhook / Slack alert** — fire an HTTP webhook or Slack notification when a failover occurs
 - [ ] **docker compose watch** — hot-reload on code changes during local development without full rebuild
