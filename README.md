@@ -110,12 +110,12 @@ watchdog-go/
 
 ## Key Concepts Demonstrated
 
-| What we built | Kubernetes equivalent |
-|---|---|
-| HTTP poll on `/status` | Liveness probe |
-| Auto-start backup container | ReplicaSet self-healing |
-| Traffic switch on failure | Service load balancing |
-| Manual imperative logic | Declarative desired state |
+| What we built | Kubernetes equivalent | Note |
+|---|---|---|
+| HTTP poll on `/status` | Liveness probe | |
+| Auto-start backup container | ReplicaSet self-healing | |
+| Manual port switch on failure | Service load balancing | No proxy — you hit `:18082` manually after failover |
+| Manual imperative logic | Declarative desired state | |
 
 ---
 
@@ -128,6 +128,7 @@ watchdog-go/
 
 ## Future Features
 
+- [ ] **Automatic traffic switch** — add a reverse proxy (nginx or a small Go proxy) in front so traffic shifts to `victim-b` without manual port change, making the K8s Service analogy real
 - [ ] **Restart downed primary** — instead of only starting a backup, attempt to restart `victim-a` and switch traffic back once healthy (implements full reconciliation loop)
 - [ ] **Multiple failover targets** — maintain a pool of N backups and pick the next healthy one round-robin
 - [ ] **Configurable via env/flags** — make check interval, timeout, target URLs, and container names configurable without recompiling
