@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,7 +17,7 @@ const (
 )
 
 func main() {
-	backupStarted := false
+	var backupStarted atomic.Bool
 	client := &http.Client{Timeout: 2 * time.Second}
 
 	log.Println("Watchdog started. Monitoring victim-a every 5s...")
@@ -24,7 +25,7 @@ func main() {
 	// expose a simple status endpoint for the watchdog itself
 	go func() {
 		http.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-			if backupStarted {
+			if backupStarted.Load() {
 				fmt.Fprintln(w, "watchdog: victim-a is DOWN, victim-b is running")
 			} else {
 				fmt.Fprintln(w, "watchdog: victim-a is UP")
@@ -36,7 +37,7 @@ func main() {
 	ticker := time.NewTicker(checkInterval)
 	for range ticker.C {
 		// after failover: poll victim-b and keep logging its liveness
-		if backupStarted {
+		if backupStarted.Load() {
 			resp, err := client.Get(backupURL)
 			if err != nil {
 				log.Printf("[DOWN] victim-b is unreachable: %v", err)
@@ -58,7 +59,7 @@ func main() {
 				log.Printf("[ERROR] Failed to start %s: %v\n%s", backupContainer, err, out)
 			} else {
 				log.Printf("[OK] %s started successfully: %s", backupContainer, out)
-				backupStarted = true
+				backupStarted.Store(true)
 			}
 		} else {
 			resp.Body.Close()
